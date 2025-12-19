@@ -54,4 +54,39 @@ def project_growth_table(position_usd: float, apy_percent: float, horizon_days: 
         )
 
     return pd.DataFrame(rows)
+import numpy as np
+import pandas as pd
+
+
+def impermanent_loss(price_change: float) -> float:
+    """
+    price_change: decimal (e.g. 0.05 = +5%, -0.10 = -10%)
+    Returns IL vs HODL as decimal (negative = loss).
+    Assumes a 50/50 constant-product (v2-style) pool.
+    """
+    return (2 * np.sqrt(1 + price_change) / (2 + price_change)) - 1
+
+
+def build_il_table(
+    position_usd: float,
+    step: float = 0.05,
+    max_move: float = 0.50
+) -> pd.DataFrame:
+    """
+    Builds an impermanent loss stress table from -max_move to +max_move.
+    Default: +/-50% in 5% increments.
+    """
+    moves = np.arange(-max_move, max_move + step, step)
+    rows = []
+
+    for m in moves:
+        il = impermanent_loss(m)
+        rows.append({
+            "Price move (%)": int(m * 100),
+            "IL (%)": round(il * 100, 2),
+            "IL ($)": round(position_usd * il, 2)
+        })
+
+    return pd.DataFrame(rows)
+
 
