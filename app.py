@@ -93,7 +93,7 @@ st.dataframe(
             "pool",
         ]
     ],
-    use_container_width=True,
+    width="stretch",
 )
 
 pool_ids = df["pool"].tolist()
@@ -143,7 +143,7 @@ growth_table = project_growth_table(
     compounded=compounded,
 )
 
-st.dataframe(growth_table, use_container_width=True)
+st.dataframe(growth_table, width="stretch")
 
 c1, c2, c3 = st.columns(3)
 
@@ -163,7 +163,7 @@ il_table = build_il_table(
     max_move=0.50, # ±50%
 )
 
-st.dataframe(il_table, use_container_width=True)
+st.dataframe(il_table, width="stretch")
 
 st.caption(
     "IL assumes a 50/50 constant-product (v2-style) pool. "
