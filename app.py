@@ -3,169 +3,216 @@ import pandas as pd
 
 from logic.fetch_pools import get_pools_df
 from logic.calculations import (
-    project_end_value,
     project_growth_table,
     build_il_table,
+    apy_to_daily_rate,
 )
 
-# --------------------------------------------------
-# Page setup
-# --------------------------------------------------
-
+# ------------------------------------------------------------
+# Page config
+# ------------------------------------------------------------
 st.set_page_config(
     page_title="DeFi LP APY Calculator",
-    page_icon="📈",
     layout="wide",
 )
 
+# ------------------------------------------------------------
+# Header
+# ------------------------------------------------------------
 st.title("DeFi LP APY Calculator")
-st.caption("APY-first projection using DeFiLlama pool yields. IL shown as a stress test.")
-
-# --------------------------------------------------
-# Sidebar controls
-# --------------------------------------------------
-
-st.sidebar.header("Settings")
-
-if st.sidebar.button("Refresh pool data"):
-    pools_df = get_pools_df(force_refresh=True)
-else:
-    pools_df = get_pools_df()
-
-position_usd = st.sidebar.number_input(
-    "Position size (USD)",
-    min_value=0.0,
-    value=100.0,
-    step=50.0,
+st.caption(
+    "APY-first projection using DeFiLlama pool yields. "
+    "Impermanent loss shown as a conservative stress test."
 )
+st.divider()
 
-horizon_days = st.sidebar.number_input(
-    "Time horizon (days)",
-    min_value=1,
-    value=30,
-    step=1,
-)
+# ------------------------------------------------------------
+# Sidebar
+# ------------------------------------------------------------
+with st.sidebar:
+    st.header("Settings")
 
-compounded = st.sidebar.selectbox(
-    "Compounding",
-    options=[True, False],
-    format_func=lambda x: "Daily (compounded)" if x else "Simple (non-compounded)",
-)
+    refresh = st.button("🔄 Refresh pool data")
 
-st.sidebar.divider()
-
-search = st.sidebar.text_input(
-    "Pool filter (symbol / project / chain)",
-    value="",
-)
-
-max_results = st.sidebar.slider("Max results", 10, 200, 50)
-
-# --------------------------------------------------
-# Pool filtering
-# --------------------------------------------------
-
-df = pools_df.copy()
-
-if search:
-    mask = (
-        df["symbol"].str.contains(search, case=False, na=False)
-        | df["project"].str.contains(search, case=False, na=False)
-        | df["chain"].str.contains(search, case=False, na=False)
+    st.subheader("Position")
+    position_usd = st.number_input(
+        "Position size (USD)",
+        min_value=0.0,
+        value=100.0,
+        step=10.0,
+        format="%.2f",
     )
-    df = df[mask]
 
-df = df.sort_values("tvlUsd", ascending=False).head(max_results)
+    horizon_days = st.slider(
+        "Time horizon (days)",
+        min_value=1,
+        max_value=365,
+        value=30,
+    )
 
-st.subheader("1) Pick a pool")
+    compounding = st.selectbox(
+        "Compounding method",
+        ["Daily (compounded)", "Simple (non-compounded)"],
+    )
+    compounded = compounding.startswith("Daily")
 
-st.dataframe(
-    df[
+    st.subheader("Pool filter")
+    search = st.text_input("Search (symbol / project / chain)", "")
+    max_results = st.slider("Max results", 5, 100, 50)
+
+# ------------------------------------------------------------
+# Load pools
+# ------------------------------------------------------------
+pools_df = get_pools_df(force_refresh=refresh)
+
+# Optional search filter
+if search.strip():
+    mask = (
+        pools_df["symbol"].str.contains(search, case=False, na=False)
+        | pools_df["project"].str.contains(search, case=False, na=False)
+        | pools_df["chain"].str.contains(search, case=False, na=False)
+    )
+    pools_df = pools_df[mask]
+
+pools_df = pools_df.head(max_results)
+
+# ------------------------------------------------------------
+# Formatting helper
+# ------------------------------------------------------------
+def format_pools_df(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+
+    df["TVL"] = df["tvlUsd"].map(lambda x: f"${x:,.0f}" if pd.notna(x) else "—")
+    df["APY"] = df["apy"].map(lambda x: f"{x:.2f}%" if pd.notna(x) else "—")
+    df["Base APY"] = df["apyBase"].map(lambda x: f"{x:.2f}%" if pd.notna(x) else "—")
+    df["Reward APY"] = df["apyReward"].map(lambda x: f"{x:.2f}%" if pd.notna(x) else "—")
+
+    return df[
         [
             "project",
             "chain",
             "symbol",
-            "tvlUsd",
-            "apy",
-            "apyBase",
-            "apyReward",
+            "TVL",
+            "APY",
+            "Base APY",
+            "Reward APY",
             "volumeUsd7d",
             "pool",
         ]
-    ],
+    ].rename(columns={"volumeUsd7d": "7d Volume"})
+
+# ------------------------------------------------------------
+# Pool table
+# ------------------------------------------------------------
+st.subheader("1) Pick a pool")
+
+st.dataframe(
+    format_pools_df(pools_df),
+    height=360,
     width="stretch",
 )
 
-pool_ids = df["pool"].tolist()
-
-if not pool_ids:
-    st.warning("No pools match your filter.")
+if pools_df.empty:
+    st.warning("No pools match your search.")
     st.stop()
 
-selected_pool_id = st.selectbox(
-    "Select pool (by DeFiLlama pool id)",
-    pool_ids,
-    format_func=lambda pid: df.loc[df["pool"] == pid, "symbol"].iloc[0],
+# ------------------------------------------------------------
+# Pool selection
+# ------------------------------------------------------------
+pool_labels = (
+    pools_df["symbol"]
+    + " | "
+    + pools_df["chain"]
+    + " | "
+    + pools_df["project"]
 )
 
-pool = df[df["pool"] == selected_pool_id].iloc[0]
+selected_label = st.selectbox(
+    "Select pool (by DeFiLlama pool id)",
+    pool_labels,
+)
 
-# --------------------------------------------------
+selected_pool = pools_df.loc[pool_labels == selected_label].iloc[0]
+
+st.divider()
+
+# ------------------------------------------------------------
 # Pool snapshot
-# --------------------------------------------------
-
+# ------------------------------------------------------------
 st.subheader("2) Pool snapshot")
 
 col1, col2, col3, col4 = st.columns(4)
 
-col1.metric("Project", pool["project"])
-col2.metric("Chain", pool["chain"])
-col3.metric("TVL (USD)", f"${pool['tvlUsd']:,.0f}")
-col4.metric("APY (%)", f"{pool['apy']:.2f}")
+col1.metric("Project", selected_pool["project"])
+col2.metric("Chain", selected_pool["chain"])
+col3.metric("TVL (USD)", f"${selected_pool['tvlUsd']:,.0f}")
+col4.metric("APY (%)", f"{selected_pool['apy']:.2f}")
 
-# --------------------------------------------------
+daily_rate = apy_to_daily_rate(selected_pool["apy"]) * 100
+st.caption(f"Implied daily rate: **{daily_rate:.4f}%**")
+
+st.divider()
+
+# ------------------------------------------------------------
 # Position projection
-# --------------------------------------------------
-
+# ------------------------------------------------------------
 st.subheader("3) Position projection")
 
-end_value = project_end_value(
+projection_df = project_growth_table(
     position_usd=position_usd,
-    apy_percent=pool["apy"],
-    days=horizon_days,
-    compounded=compounded,
-)
-
-growth_table = project_growth_table(
-    position_usd=position_usd,
-    apy_percent=pool["apy"],
+    apy_percent=selected_pool["apy"],
     horizon_days=horizon_days,
     compounded=compounded,
 )
 
-st.dataframe(growth_table, width="stretch")
-
-c1, c2, c3 = st.columns(3)
-
-c1.metric("Start ($)", f"{position_usd:,.2f}")
-c2.metric("End ($)", f"{end_value:,.2f}")
-c3.metric("Profit ($)", f"{end_value - position_usd:,.2f}")
-
-# --------------------------------------------------
-# Impermanent loss stress test
-# --------------------------------------------------
-
-st.subheader("4) Impermanent loss stress test (± price moves)")
-
-il_table = build_il_table(
-    position_usd=position_usd,
-    step=0.05,     # 5% increments (your request)
-    max_move=0.50, # ±50%
+st.dataframe(
+    projection_df,
+    hide_index=True,
+    width="stretch",
 )
 
-st.dataframe(il_table, width="stretch")
+end_value = projection_df.iloc[-1]["End Value ($)"]
+profit = projection_df.iloc[-1]["Profit ($)"]
+
+col1, col2, col3 = st.columns(3)
+col1.metric("Start ($)", f"{position_usd:,.2f}")
+col2.metric("End ($)", f"{end_value:,.2f}")
+col3.metric("Profit ($)", f"{profit:,.2f}")
+
+st.divider()
+
+# ------------------------------------------------------------
+# Impermanent loss stress test
+# ------------------------------------------------------------
+st.subheader("4) Impermanent loss stress test (± price moves)")
 
 st.caption(
-    "IL assumes a 50/50 constant-product (v2-style) pool. "
+    "Assumes a 50/50 constant-product (v2-style) pool. "
     "APY projection and IL are intentionally shown separately."
+)
+
+il_df = build_il_table(
+    position_usd=position_usd,
+    step=0.05,
+    max_move=0.50,
+)
+
+il_df_display = il_df.copy()
+il_df_display["IL (%)"] = il_df_display["IL (%)"].map(lambda x: f"{x:.2f}%")
+il_df_display["IL ($)"] = il_df_display["IL ($)"].map(lambda x: f"${x:,.2f}")
+
+st.dataframe(
+    il_df_display,
+    hide_index=True,
+    height=360,
+    width="stretch",
+)
+
+# ------------------------------------------------------------
+# Footer
+# ------------------------------------------------------------
+st.caption(
+    "Note: This tool uses DeFiLlama pool APY as the primary yield signal. "
+    "Impermanent loss is modeled independently and does not account for "
+    "v3 ranges, active management, or fee reinvestment effects."
 )
